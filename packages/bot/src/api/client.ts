@@ -86,6 +86,17 @@ export interface CreateOrderRequest {
   metadata?: string;
 }
 
+export interface KlineCandle {
+  openTime: number;   // unix milliseconds
+  closeTime: number;  // unix milliseconds
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;     // base volume
+  trades: number;
+}
+
 export interface FundingPayment {
   sub_account_id: string;
   instrument: string;
@@ -182,6 +193,44 @@ export class GRVTClient {
   async getInstruments(): Promise<any[]> {
     const data = await publicRequest(`${MARKET_DATA_URL}/instruments`, {});
     return data;
+  }
+
+  /**
+   * Get historical kline (candlestick) data for an instrument.
+   *
+   * GRVT's kline endpoint quirks:
+   *   - Required field `type` must be "TRADE" (no other modes used in production).
+   *   - `interval` uses GRVT's CI_<n>_<unit> enum (e.g. "CI_1_M", "CI_1_H",
+   *     "CI_4_H", "CI_1_D"). NOT "1h" / "1m".
+   *   - `open_time` / `close_time` come back as **nanosecond strings**
+   *     (not millis, not numbers). The dashboard divides by 1e6 to render.
+   *   - `start_time` / `end_time` go in as nanoseconds too if provided.
+   *   - The API returns rows in **reverse chronological order** (newest first).
+   *     The chart wants ascending, so the v2-router reverses before sending.
+   */
+  async getKlines(
+    instrument: string,
+    interval: string = 'CI_1_H',
+    limit: number = 500
+  ): Promise<KlineCandle[]> {
+    const data = await publicRequest(`${MARKET_DATA_URL}/kline`, {
+      instrument,
+      interval,
+      type: 'TRADE',
+      limit
+    });
+    // GRVT returns { result: [...], next: '...' } — flatten the result.
+    const rows: any[] = Array.isArray(data?.result) ? data.result : [];
+    return rows.map((row): KlineCandle => ({
+      openTime: Number(row.open_time) / 1_000_000, // ns string -> ms
+      closeTime: Number(row.close_time) / 1_000_000,
+      open: parseFloat(row.open),
+      high: parseFloat(row.high),
+      low: parseFloat(row.low),
+      close: parseFloat(row.close),
+      volume: parseFloat(row.volume_b ?? '0'),
+      trades: Number(row.trades ?? 0)
+    }));
   }
 
   // === TRADING API (autenticado) ===

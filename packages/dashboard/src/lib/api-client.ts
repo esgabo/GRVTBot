@@ -9,6 +9,8 @@
 import {
   ApiError,
   type BotSummary,
+  type Candle,
+  type CandleInterval,
   type DailySnapshot,
   type GridState,
   type HealthV2,
@@ -80,4 +82,19 @@ export const api = {
     request<{ roundtrips: Roundtrip[]; count: number; totalProfit: number }>(
       `/bots/${id}/roundtrips`
     ),
+
+  getCandles: (
+    pair: string,
+    interval: CandleInterval = 'CI_1_H',
+    limit = 500
+  ) => {
+    const qs = new URLSearchParams({
+      pair,
+      interval,
+      limit: String(limit),
+    });
+    return request<{ pair: string; interval: string; candles: Candle[] }>(
+      `/candles?${qs.toString()}`
+    );
+  },
 };

@@ -25,6 +25,7 @@ interface GrvtClient {
   getTicker(instrument: string): Promise<unknown>;
   getPosition(instrument: string): Promise<unknown>;
   getOpenOrders(instrument?: string): Promise<unknown[]>;
+  getKlines(instrument: string, interval?: string, limit?: number): Promise<unknown[]>;
 }
 
 export interface V2RouterDeps {
@@ -156,6 +157,48 @@ export function createV2Router(deps: V2RouterDeps): Router {
   router.get('/instruments', asyncHandler(async (_req, res) => {
     const data = await cache.getOrFetch('instruments', 60_000, () => grvtClient.getInstruments());
     res.json({ instruments: data });
+    return;
+  }));
+
+  // ── GET /api/v2/candles ───────────────────────────────────────────
+  // Proxy to GRVT klines for the GridChart.
+  // Query params:
+  //   pair      - instrument name (default: ETH_USDT_Perp)
+  //   interval  - GRVT enum (default: CI_1_H). Whitelisted to a few common ones.
+  //   limit     - max candles, capped at 1000
+  // Cached 30s for 1H+, 5s for sub-hour intervals.
+  // Returns ascending (oldest first) — the GRVT API returns newest first;
+  // we reverse so Lightweight Charts can append in order.
+  router.get('/candles', asyncHandler(async (req, res) => {
+    const pair = String(req.query.pair ?? 'ETH_USDT_Perp');
+    const interval = String(req.query.interval ?? 'CI_1_H');
+    const limitRaw = parseInt(String(req.query.limit ?? '500'), 10);
+    const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 500, 10), 1000);
+
+    // Whitelist intervals — anything else is rejected to keep the cache key
+    // space bounded and prevent typos from spawning a new cache entry per req.
+    const VALID_INTERVALS = new Set([
+      'CI_1_M', 'CI_3_M', 'CI_5_M', 'CI_15_M', 'CI_30_M',
+      'CI_1_H', 'CI_2_H', 'CI_4_H', 'CI_6_H', 'CI_8_H', 'CI_12_H',
+      'CI_1_D', 'CI_3_D', 'CI_1_W'
+    ]);
+    if (!VALID_INTERVALS.has(interval)) {
+      return res.status(400).json({
+        error: 'invalid_interval',
+        hint: 'use CI_1_M / CI_5_M / CI_15_M / CI_1_H / CI_4_H / CI_1_D etc.'
+      });
+    }
+
+    // Sub-hour intervals refresh more often, so cache them shorter.
+    const ttl = interval.endsWith('_M') ? 5_000 : 30_000;
+    const cacheKey = `candles:${pair}:${interval}:${limit}`;
+    const candles = await cache.getOrFetch(cacheKey, ttl, async () => {
+      const rows = await grvtClient.getKlines(pair, interval, limit);
+      // Reverse to ascending order for the chart (GRVT returns newest first).
+      return rows.slice().reverse();
+    });
+
+    res.json({ pair, interval, candles });
     return;
   }));
 

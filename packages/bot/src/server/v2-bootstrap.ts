@@ -27,6 +27,7 @@ interface GrvtClient {
   getTicker(instrument: string): Promise<unknown>;
   getPosition(instrument: string): Promise<unknown>;
   getOpenOrders(instrument?: string): Promise<unknown[]>;
+  getKlines(instrument: string, interval?: string, limit?: number): Promise<unknown[]>;
 }
 
 export interface MountV2Options {

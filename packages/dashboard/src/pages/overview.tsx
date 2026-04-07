@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '@/lib/api-client';
 import { useWsChannel } from '@/lib/use-ws-channel';
 import { formatPercent, formatPnl, formatSize, formatUsd } from '@/lib/format';
@@ -172,16 +173,12 @@ export function OverviewPage() {
         </dl>
       </Card>
 
-      {/* B.4 placeholder */}
-      <Card className="border-dashed border-border-default">
-        <h3 className="text-sm font-semibold text-text-secondary mb-1">
-          GridChart — coming in B.4
-        </h3>
-        <p className="text-xs text-text-muted">
-          The hero chart with candles + grid overlays + fill animations will land
-          in the next phase. The skeleton + WS pipeline are now ready for it.
-        </p>
-      </Card>
+      <Link
+        to={`/bots/${bot.id}`}
+        className="inline-flex items-center gap-2 text-sm text-primary hover:text-primary-strong transition-colors"
+      >
+        Open bot detail →
+      </Link>
     </div>
   );
 }

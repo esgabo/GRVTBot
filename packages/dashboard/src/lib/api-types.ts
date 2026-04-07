@@ -79,6 +79,28 @@ export interface Roundtrip {
   created_at: string;
 }
 
+// Kline / candlestick — both timestamps in unix MILLISECONDS (not ns).
+// The bot's getKlines() already converts the GRVT ns string format.
+export interface Candle {
+  openTime: number;
+  closeTime: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  trades: number;
+}
+
+export type CandleInterval =
+  | 'CI_1_M'
+  | 'CI_5_M'
+  | 'CI_15_M'
+  | 'CI_30_M'
+  | 'CI_1_H'
+  | 'CI_4_H'
+  | 'CI_1_D';
+
 export interface HealthV2 {
   status: 'ok';
   uptime: number;
