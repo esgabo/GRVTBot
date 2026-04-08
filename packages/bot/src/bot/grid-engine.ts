@@ -39,6 +39,7 @@ export class GridEngine extends EventEmitter {
   private fundingPollingInterval: NodeJS.Timeout | null = null; // ⚠️ NUEVO: Polling funding
   private dailySnapshotInterval: NodeJS.Timeout | null = null; // ⚠️ NUEVO: Daily snapshots
   private compoundCheckInterval: NodeJS.Timeout | null = null;
+  private fillPollingInterval: NodeJS.Timeout | null = null; // Phase B.10: Fill archive poller
   private isRunning = false;
 
   constructor() {
@@ -89,8 +90,24 @@ export class GridEngine extends EventEmitter {
         this.backfillFundingHistory().catch(console.error);
       }, 5000); // Ejecutar después de 5s para que el engine esté listo
 
+      // Phase B.10: Fill archive poller — pulls fill_history from GRVT
+      // every 30s, dedupes by fill_id, writes to fills_archive +
+      // paired_roundtrips. The user discovered that fills_archive had
+      // been frozen since 2026-03-24 because nothing was writing to it
+      // in the engine — the schema existed but the writer was never
+      // implemented. This loop is the writer.
+      this.fillPollingInterval = setInterval(() => {
+        this.pollFillArchive().catch((err) => {
+          console.error('❌ Fill archive poller error:', err.message);
+        });
+      }, 30 * 1000);
+      // First poll fires 8s after boot (after auth + initial monitor pass)
+      setTimeout(() => {
+        this.pollFillArchive().catch(console.error);
+      }, 8_000);
+
       this.isRunning = true;
-      console.log('✅ Grid Engine iniciado - monitoreando cada 5s, funding cada 30min, snapshots cada 24h');
+      console.log('✅ Grid Engine iniciado - monitoreando cada 5s, funding cada 30min, fills cada 30s, snapshots cada 24h');
       
     } catch (error) {
       console.error('❌ Error iniciando Grid Engine:', error);
@@ -127,6 +144,12 @@ export class GridEngine extends EventEmitter {
     if (this.compoundCheckInterval) {
       clearInterval(this.compoundCheckInterval);
       this.compoundCheckInterval = null;
+    }
+
+    // Phase B.10: clear fill poller
+    if (this.fillPollingInterval) {
+      clearInterval(this.fillPollingInterval);
+      this.fillPollingInterval = null;
     }
 
     // Pausar todos los bots
@@ -1045,6 +1068,74 @@ export class GridEngine extends EventEmitter {
     } catch (error) {
       console.error(`❌ Error updating bot range:`, error);
       throw error;
+    }
+  }
+
+  /**
+   * Phase B.10: Periodic fill poller.
+   *
+   * Pulls fill_history from GRVT and writes every fill into the
+   * fills_archive table. Idempotent via INSERT OR IGNORE on the
+   * UNIQUE event_time key, so catch-up after downtime is free.
+   *
+   * EVERYTHING is real GRVT data:
+   *   - `fee`        → exactly what GRVT charged/refunded for that
+   *                    fill on that account at that volume tier. We
+   *                    never compute or assume a fee — different
+   *                    accounts pay different rates (volume tier,
+   *                    HBG staking, builder code...).
+   *   - `price/size` → from GRVT's fill record, not the order request.
+   *   - `event_time` → GRVT's nanosecond timestamp, used as the
+   *                    unique key (more reliable than trade_id which
+   *                    came in different formats from old vs new
+   *                    fill_history responses).
+   *   - `is_buyer`   → directly from GRVT's flag.
+   *
+   * NOTE: this loop does NOT write to paired_roundtrips. The previous
+   * pairing implementation in calculateRealGridProfit() uses heuristic
+   * spread bounds ($3..$20) to GUESS which buy filled which sell —
+   * exactly the kind of estimation we don't want shipping in stats.
+   * The bot's authoritative grid_profit_usdt comes from the engine's
+   * per-level state machine. The rebate stat we surface to the
+   * dashboard is just SUM(fee) over real fills.
+   */
+  private async pollFillArchive(): Promise<void> {
+    if (this.bots.size === 0) return;
+
+    let allFills: any[];
+    try {
+      allFills = await grvtClient.getFillHistory(1000);
+    } catch (err) {
+      console.warn(`⚠️ Fill poller: getFillHistory failed: ${(err as Error).message}`);
+      return;
+    }
+    if (!Array.isArray(allFills) || allFills.length === 0) return;
+
+    let newFillCount = 0;
+    let newFeeSum = 0;
+    for (const f of allFills) {
+      const eventTime = String(f.event_time ?? '');
+      if (!eventTime) continue;
+      const fee = parseFloat(f.fee ?? '0');
+      const inserted = await db.insertFillArchive({
+        fill_id: eventTime,
+        event_time: eventTime,
+        is_buyer: f.is_buyer ? 1 : 0,
+        price: parseFloat(f.price ?? '0'),
+        size: parseFloat(f.size ?? '0'),
+        fee,
+        created_at: new Date(Number(eventTime) / 1_000_000).toISOString(),
+      });
+      if (inserted) {
+        newFillCount++;
+        newFeeSum += fee;
+      }
+    }
+
+    if (newFillCount > 0) {
+      console.log(
+        `📥 Fill archive: +${newFillCount} new fills (real fee sum ${newFeeSum.toFixed(6)} USDT, ${newFeeSum < 0 ? 'rebate earned' : 'fees paid'})`
+      );
     }
   }
 }

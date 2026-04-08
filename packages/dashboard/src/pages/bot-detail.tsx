@@ -9,11 +9,11 @@ import { toast } from 'sonner';
 import { api } from '@/lib/api-client';
 import type {
   DailySnapshot,
+  FillRow,
   FundingRow,
   GridLevel,
   GridState,
   OrderRow,
-  Trade,
 } from '@/lib/api-types';
 import { useWsChannel } from '@/lib/use-ws-channel';
 import {
@@ -424,10 +424,15 @@ type DetailTab = 'fills' | 'orders' | 'funding' | 'snapshots';
 function BotDetailTabs({ botId }: { botId: number }) {
   const [tab, setTab] = useState<DetailTab>('fills');
 
-  const tradesQuery = useQuery({
-    queryKey: ['trades', botId],
-    queryFn: () => api.getTrades(botId, { limit: 200 }),
-    refetchInterval: 10_000,
+  // Fills come from fills_archive (populated by the engine's
+  // pollFillArchive loop). Replaces the old getTrades query which
+  // read from a table that had been frozen since 2026-03-10. Every
+  // row in this query is a real GRVT fill with the real fee GRVT
+  // charged or refunded for that account.
+  const fillsQuery = useQuery({
+    queryKey: ['fills', botId],
+    queryFn: () => api.getFills(botId, { limit: 200 }),
+    refetchInterval: 30_000, // matches the engine's poll cadence
   });
 
   const ordersQuery = useQuery({
@@ -456,7 +461,7 @@ function BotDetailTabs({ botId }: { botId: number }) {
             {
               value: 'fills',
               label: 'Fills',
-              badge: tradesQuery.data?.trades.length ?? '—',
+              badge: fillsQuery.data?.fills.length ?? '—',
             },
             {
               value: 'orders',
@@ -478,7 +483,7 @@ function BotDetailTabs({ botId }: { botId: number }) {
           onChange={(v) => setTab(v as DetailTab)}
         >
           {tab === 'fills' && (
-            <FillsTable trades={tradesQuery.data?.trades ?? []} loading={tradesQuery.isPending} />
+            <FillsTable fills={fillsQuery.data?.fills ?? []} loading={fillsQuery.isPending} />
           )}
           {tab === 'orders' && (
             <OrdersTable
@@ -507,7 +512,26 @@ function BotDetailTabs({ botId }: { botId: number }) {
   );
 }
 
-const FILLS_COLUMNS: Column<Trade>[] = [
+// Fee column rendering rule:
+//   fee < 0  → user EARNED a maker rebate, show in green with "+" sign
+//              (the negative sign on the wire = positive PnL for the user)
+//   fee > 0  → user PAID a taker fee, show in red with "-" sign
+//   fee == 0 → no charge, show muted "—"
+function renderFee(fee: number): React.ReactNode {
+  if (fee === 0) return <span className="text-text-disabled">—</span>;
+  // Negative fee = rebate earned. Display as a positive PnL.
+  const earned = -fee;
+  return (
+    <span
+      className={earned > 0 ? 'text-success' : 'text-danger'}
+      title={earned > 0 ? 'Maker rebate earned' : 'Taker fee paid'}
+    >
+      {formatPnl(earned)}
+    </span>
+  );
+}
+
+const FILLS_COLUMNS: Column<FillRow>[] = [
   {
     key: 'time',
     header: 'Time (UTC)',
@@ -522,12 +546,12 @@ const FILLS_COLUMNS: Column<Trade>[] = [
     render: (r) => (
       <span
         className={
-          r.side === 'buy'
+          r.is_buyer === 1
             ? 'text-success font-semibold uppercase'
             : 'text-danger font-semibold uppercase'
         }
       >
-        {r.side}
+        {r.is_buyer === 1 ? 'BUY' : 'SELL'}
       </span>
     ),
     align: 'center',
@@ -542,62 +566,71 @@ const FILLS_COLUMNS: Column<Trade>[] = [
     mono: true,
   },
   {
-    key: 'qty',
+    key: 'size',
     header: 'Size',
-    render: (r) => formatSize(r.quantity),
-    sortValue: (r) => r.quantity,
+    render: (r) => formatSize(r.size),
+    sortValue: (r) => r.size,
+    align: 'right',
+    mono: true,
+  },
+  {
+    key: 'notional',
+    header: 'Notional',
+    render: (r) => formatUsd(r.price * r.size),
+    sortValue: (r) => r.price * r.size,
     align: 'right',
     mono: true,
   },
   {
     key: 'fee',
-    header: 'Fee',
-    render: (r) => formatUsd(r.fee),
+    header: 'Fee / Rebate',
+    render: (r) => renderFee(r.fee),
     sortValue: (r) => r.fee,
-    align: 'right',
-    mono: true,
-  },
-  {
-    key: 'profit',
-    header: 'RT profit',
-    render: (r) =>
-      r.round_trip_profit != null ? (
-        <span
-          className={
-            r.round_trip_profit > 0
-              ? 'text-success'
-              : r.round_trip_profit < 0
-                ? 'text-danger'
-                : ''
-          }
-        >
-          {formatPnl(r.round_trip_profit)}
-        </span>
-      ) : (
-        <span className="text-text-disabled">—</span>
-      ),
-    sortValue: (r) => r.round_trip_profit ?? 0,
     align: 'right',
     mono: true,
   },
 ];
 
-function FillsTable({ trades, loading }: { trades: Trade[]; loading: boolean }) {
+function FillsTable({ fills, loading }: { fills: FillRow[]; loading: boolean }) {
   if (loading) {
     return (
       <div className="text-center py-8 text-sm text-text-muted animate-pulse">
-        Loading trades…
+        Loading fills…
       </div>
     );
   }
+  // Sum of (-fee) so positive = net rebate earned, negative = net fees paid.
+  // ALL real GRVT data — sums whatever GRVT actually charged this account.
+  const netRebate = fills.reduce((acc, f) => acc + -f.fee, 0);
   return (
-    <DataTable
-      rows={trades}
-      columns={FILLS_COLUMNS}
-      pageSize={20}
-      rowKey={(r) => r.id}
-      emptyMessage="No fills yet"
-    />
+    <div>
+      <div className="flex items-center justify-end pb-3 px-3 text-xs gap-4">
+        <span className="text-text-muted">
+          Showing last <Mono>{fills.length}</Mono> fills
+        </span>
+        <span className="text-text-muted uppercase tracking-wider">
+          Net rebate this window:
+        </span>
+        <span
+          className={
+            netRebate > 0
+              ? 'text-success'
+              : netRebate < 0
+                ? 'text-danger'
+                : 'text-text-primary'
+          }
+        >
+          <Mono>{formatPnl(netRebate)}</Mono>
+        </span>
+      </div>
+      <DataTable
+        rows={fills}
+        columns={FILLS_COLUMNS}
+        pageSize={20}
+        rowKey={(r) => r.id}
+        emptyMessage="No fills yet (the engine polls fills every 30s)"
+      />
+    </div>
   );
 }
 

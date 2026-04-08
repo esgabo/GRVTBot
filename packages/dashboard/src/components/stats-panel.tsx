@@ -25,6 +25,14 @@ export function StatsPanel({ bot }: StatsPanelProps) {
     staleTime: 5 * 60_000,
   });
 
+  // Real maker rebate summary, sourced from fills_archive (every fee is what
+  // GRVT actually charged or refunded on this account — never estimated).
+  const rebate = useQuery({
+    queryKey: ['rebate-summary', bot.id],
+    queryFn: () => api.getRebateSummary(bot.id),
+    refetchInterval: 30_000,
+  });
+
   const rtCount = roundtrips.data?.count ?? 0;
   const rtTotalProfit = roundtrips.data?.totalProfit ?? 0;
   const winningRts = (roundtrips.data?.roundtrips ?? []).filter(
@@ -62,6 +70,17 @@ export function StatsPanel({ bot }: StatsPanelProps) {
           label="Funding"
           value={formatPnl(totalFunding)}
           tone={totalFunding > 0 ? 'success' : totalFunding < 0 ? 'danger' : 'default'}
+        />
+        <Row
+          label={`Maker rebate (${rebate.data?.count ?? 0} fills)`}
+          value={formatPnl(rebate.data?.netRebateUsdt ?? 0)}
+          tone={
+            (rebate.data?.netRebateUsdt ?? 0) > 0
+              ? 'success'
+              : (rebate.data?.netRebateUsdt ?? 0) < 0
+                ? 'danger'
+                : 'default'
+          }
         />
       </dl>
     </Card>

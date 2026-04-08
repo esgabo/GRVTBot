@@ -278,6 +278,83 @@ export function createV2Router(deps: V2RouterDeps): Router {
     return;
   }));
 
+  // ── GET /api/v2/bots/:id/fills ────────────────────────────────────
+  // Reads from fills_archive (which is now actively populated by the
+  // engine's pollFillArchive loop). Replaces the legacy /trades endpoint
+  // for the dashboard's Fills tab — the trades table was frozen since
+  // 2026-03-10 and the dashboard was showing stale fees=$0.00 numbers.
+  //
+  // EVERY field in the response comes from the live GRVT fill_history
+  // record. The fee is what GRVT actually charged or refunded for that
+  // fill on this account at this volume tier — no fee schedule
+  // assumptions, no formulas.
+  router.get('/bots/:id/fills', asyncHandler(async (req, res) => {
+    const id = parseInt(String(req.params.id ?? ''), 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid bot id' });
+    const limit = Math.min(parseInt(String(req.query.limit ?? '200'), 10) || 200, 1000);
+
+    const fills = await dbAll<{
+      id: number;
+      fill_id: string;
+      event_time: string;
+      is_buyer: number;
+      price: number;
+      size: number;
+      fee: number;
+      created_at: string;
+    }>(db, `
+      SELECT id, fill_id, event_time, is_buyer, price, size, fee, created_at
+      FROM fills_archive
+      ORDER BY event_time DESC
+      LIMIT ?
+    `, [limit]);
+
+    res.json({ fills });
+    return;
+  }));
+
+  // ── GET /api/v2/bots/:id/rebate-summary ───────────────────────────
+  // Aggregate fee stats over the entire fills_archive. Used by the
+  // StatsPanel to show the maker rebate total.
+  //
+  // SUM(fee) is signed: negative means net rebate (you earned that
+  // much from being a maker), positive means net fees paid. The
+  // dashboard renders the sign with a + or - prefix and a green/red
+  // color so the user always knows which way it's going. The bot is
+  // fee-agnostic — what GRVT charges depends on the user's tier and
+  // can be a rebate or a fee or both at different times.
+  router.get('/bots/:id/rebate-summary', asyncHandler(async (req, res) => {
+    const id = parseInt(String(req.params.id ?? ''), 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid bot id' });
+    void id; // fills_archive is global in v0; ignored until multi-bot migration
+
+    const row = await dbGet<{
+      count: number;
+      sum_fee: number | null;
+      min_fee: number | null;
+      max_fee: number | null;
+    }>(db, `
+      SELECT COUNT(*) AS count,
+             COALESCE(SUM(fee), 0) AS sum_fee,
+             MIN(fee) AS min_fee,
+             MAX(fee) AS max_fee
+      FROM fills_archive
+    `);
+
+    const sumFee = row?.sum_fee ?? 0;
+    const count = row?.count ?? 0;
+
+    res.json({
+      count,
+      sumFee,                            // signed; negative = rebate earned
+      netRebateUsdt: -sumFee,            // positive when user earned, for UI
+      avgFee: count > 0 ? sumFee / count : 0,
+      minFee: row?.min_fee ?? 0,
+      maxFee: row?.max_fee ?? 0,
+    });
+    return;
+  }));
+
   // ── GET /api/v2/bots/:id/orders ───────────────────────────────────
   // Local DB orders (the GRVT live open orders are surfaced via grid-state).
   // The orders table can be SQLITE_CORRUPT on legacy databases — we wrap

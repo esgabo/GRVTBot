@@ -718,7 +718,133 @@ export class GridBotDB {
     return !!result;
   }
 
+  // === fills_archive ===
+
+  /**
+   * Insert a fill into fills_archive. Idempotent: uses INSERT OR IGNORE
+   * keyed on the unique fill_id, so calling it twice with the same fill
+   * is safe and returns 0 changes the second time. Returns true if a new
+   * row was inserted, false if it was a duplicate.
+   *
+   * The fills_archive table has no bot_id (global) — fine for v0 with a
+   * single bot, will need a migration once multi-bot is live.
+   */
+  async insertFillArchive(params: {
+    fill_id: string;
+    event_time: string;
+    is_buyer: number;
+    price: number;
+    size: number;
+    fee: number;
+    created_at: string;
+  }): Promise<boolean> {
+    const result = await this.dbRun(`
+      INSERT OR IGNORE INTO fills_archive
+        (fill_id, event_time, is_buyer, price, size, fee, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [
+      params.fill_id,
+      params.event_time,
+      params.is_buyer,
+      params.price,
+      params.size,
+      params.fee,
+      params.created_at,
+    ]);
+    return (result.changes ?? 0) > 0;
+  }
+
+  /**
+   * Latest event_time we've stored, as a nanosecond string. Used by the
+   * fill poller to ask GRVT only for fills newer than the watermark.
+   * Returns null if the table is empty.
+   */
+  async getLatestFillEventTime(): Promise<string | null> {
+    const row = await this.dbGet(`
+      SELECT MAX(event_time) AS et FROM fills_archive
+    `);
+    return (row?.et as string | undefined) ?? null;
+  }
+
+  /**
+   * Aggregate fee summary for the rebates stat. Sum is the sum of raw
+   * fee values (negative for maker rebates), so a NEGATIVE sum means
+   * the user EARNED that much. count is included so the dashboard can
+   * show "N fills, $X earned".
+   */
+  async getFillFeeSummary(): Promise<{
+    count: number;
+    sumFee: number;
+    minFee: number;
+    maxFee: number;
+  }> {
+    const row = await this.dbGet(`
+      SELECT COUNT(*) AS count,
+             COALESCE(SUM(fee), 0) AS sum_fee,
+             MIN(fee) AS min_fee,
+             MAX(fee) AS max_fee
+      FROM fills_archive
+    `) as { count: number; sum_fee: number | null; min_fee: number | null; max_fee: number | null } | undefined;
+    return {
+      count: row?.count ?? 0,
+      sumFee: row?.sum_fee ?? 0,
+      minFee: row?.min_fee ?? 0,
+      maxFee: row?.max_fee ?? 0,
+    };
+  }
+
+  /**
+   * List archived fills, newest first, paginated. Used by the v2
+   * /fills endpoint that replaces the dead /trades reads.
+   */
+  async listFillArchive(limit: number = 200): Promise<Array<{
+    id: number;
+    fill_id: string;
+    event_time: string;
+    is_buyer: number;
+    price: number;
+    size: number;
+    fee: number;
+    created_at: string;
+  }>> {
+    return this.dbAll(`
+      SELECT id, fill_id, event_time, is_buyer, price, size, fee, created_at
+      FROM fills_archive
+      ORDER BY event_time DESC
+      LIMIT ?
+    `, [limit]);
+  }
+
   // === paired_roundtrips ===
+
+  /**
+   * Insert a paired round-trip. Idempotent on the (buy_fill_id, sell_fill_id)
+   * unique constraint.
+   */
+  async insertPairedRoundtrip(params: {
+    buy_fill_id: string;
+    sell_fill_id: string;
+    buy_price: number;
+    sell_price: number;
+    size: number;
+    profit: number;
+    created_at: string;
+  }): Promise<boolean> {
+    const result = await this.dbRun(`
+      INSERT OR IGNORE INTO paired_roundtrips
+        (buy_fill_id, sell_fill_id, buy_price, sell_price, size, profit, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [
+      params.buy_fill_id,
+      params.sell_fill_id,
+      params.buy_price,
+      params.sell_price,
+      params.size,
+      params.profit,
+      params.created_at,
+    ]);
+    return (result.changes ?? 0) > 0;
+  }
 
   /**
    * Contar round-trips emparejados (source of truth real para num_round_trips).

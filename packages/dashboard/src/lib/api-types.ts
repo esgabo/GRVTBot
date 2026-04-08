@@ -79,6 +79,32 @@ export interface Roundtrip {
   created_at: string;
 }
 
+// A fill recorded by the engine's fill poller, sourced verbatim from
+// GRVT's fill_history endpoint. Every field is real exchange data:
+//   - `fee` is what GRVT actually charged (positive) or refunded
+//     (negative — maker rebate) for THIS fill on THIS account at the
+//     user's current volume tier. Different accounts pay different
+//     rates; the bot is fee-agnostic and never assumes a value.
+export interface FillRow {
+  id: number;
+  fill_id: string;     // == event_time, used as the unique key
+  event_time: string;  // GRVT nanosecond timestamp
+  is_buyer: 0 | 1;
+  price: number;
+  size: number;
+  fee: number;         // signed; negative = rebate earned
+  created_at: string;  // ISO from event_time
+}
+
+export interface RebateSummary {
+  count: number;        // total fills observed
+  sumFee: number;       // signed; negative = net rebate earned
+  netRebateUsdt: number; // -sumFee; positive when user earned net
+  avgFee: number;
+  minFee: number;
+  maxFee: number;
+}
+
 export interface OrderRow {
   id: number;
   order_id: string;

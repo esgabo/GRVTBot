@@ -12,10 +12,12 @@ import {
   type Candle,
   type CandleInterval,
   type DailySnapshot,
+  type FillRow,
   type FundingRow,
   type GridState,
   type HealthV2,
   type OrderRow,
+  type RebateSummary,
   type Roundtrip,
   type Trade,
   type ValidateBotInput,
@@ -86,6 +88,19 @@ export const api = {
     request<{ roundtrips: Roundtrip[]; count: number; totalProfit: number }>(
       `/bots/${id}/roundtrips`
     ),
+
+  // Real fills from the actively-populated fills_archive table. Source
+  // is GRVT fill_history — every fee is what the exchange actually
+  // charged or refunded on this account.
+  getFills: (id: number, opts: { limit?: number } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.limit) qs.set('limit', String(opts.limit));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<{ fills: FillRow[] }>(`/bots/${id}/fills${suffix}`);
+  },
+
+  getRebateSummary: (id: number) =>
+    request<RebateSummary>(`/bots/${id}/rebate-summary`),
 
   getOrders: (
     id: number,
