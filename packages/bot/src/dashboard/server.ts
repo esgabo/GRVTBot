@@ -1000,13 +1000,27 @@ const dashV2Path = dashV2Candidates.find((p) => {
   try { return fs.existsSync(path.join(p, 'index.html')); } catch { return false; }
 });
 if (dashV2Path) {
-  app.use('/dashboard', express.static(dashV2Path));
+  // Cache strategy:
+  //   /assets/* → hashed filenames → cache forever (immutable)
+  //   index.html (and any other unhashed file) → no-cache, must revalidate
+  // This avoids the stale-chunk problem after a deploy: the browser always
+  // re-fetches index.html, which references the new asset hashes.
+  app.use('/dashboard', express.static(dashV2Path, {
+    setHeaders: (res, filePath) => {
+      if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+      }
+    },
+  }));
   // SPA fallback: any deep link / refresh under /dashboard/* serves index.html
   // so the React Router can take over client-side. Excludes static assets
   // (already handled by express.static above) by checking that the path has
   // no file extension OR ends in /.
   app.get(/^\/dashboard(\/.*)?$/, (req, res, next) => {
     if (path.extname(req.path)) return next();  // let static handle .js/.css
+    res.setHeader('Cache-Control', 'no-cache, must-revalidate');
     res.sendFile(path.join(dashV2Path, 'index.html'), (err) => {
       if (err) next(err);
     });
