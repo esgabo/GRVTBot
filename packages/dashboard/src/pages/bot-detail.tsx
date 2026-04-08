@@ -517,6 +517,15 @@ function BotDetailTabs({ botId }: { botId: number }) {
 //              (the negative sign on the wire = positive PnL for the user)
 //   fee > 0  → user PAID a taker fee, show in red with "-" sign
 //   fee == 0 → no charge, show muted "—"
+// Per-fill rebates are tiny (~$0.001), so formatPnl's 2-decimal scale would
+// collapse every row to "+$0.00". Use 4 decimals here so the user can see
+// the actual rebate per fill — and tooltip the 6-decimal exact value for
+// power-users / accounting reconciliation.
+function formatFee4(value: number): string {
+  const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+  return `${sign}$${Math.abs(value).toFixed(4)}`;
+}
+
 function renderFee(fee: number): React.ReactNode {
   if (fee === 0) return <span className="text-text-disabled">—</span>;
   // Negative fee = rebate earned. Display as a positive PnL.
@@ -524,9 +533,12 @@ function renderFee(fee: number): React.ReactNode {
   return (
     <span
       className={earned > 0 ? 'text-success' : 'text-danger'}
-      title={earned > 0 ? 'Maker rebate earned' : 'Taker fee paid'}
+      title={
+        (earned > 0 ? 'Maker rebate earned: ' : 'Taker fee paid: ') +
+        `$${earned.toFixed(6)}`
+      }
     >
-      {formatPnl(earned)}
+      {formatFee4(earned)}
     </span>
   );
 }
@@ -620,7 +632,7 @@ function FillsTable({ fills, loading }: { fills: FillRow[]; loading: boolean }) 
                 : 'text-text-primary'
           }
         >
-          <Mono>{formatPnl(netRebate)}</Mono>
+          <Mono>{formatFee4(netRebate)}</Mono>
         </span>
       </div>
       <DataTable
