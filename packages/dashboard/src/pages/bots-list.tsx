@@ -6,27 +6,15 @@ import { useQuery } from '@tanstack/react-query';
 import { lazy, Suspense, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { useWsChannel } from '@/lib/use-ws-channel';
 import { Button } from '@/components/primitives/button';
 import { Card } from '@/components/primitives/card';
 import { BotCard } from '@/components/bot-card';
-import type { BotSummary } from '@/lib/api-types';
 
 const CreateBotWizard = lazy(() =>
   import('@/components/create-bot-wizard').then((m) => ({
     default: m.CreateBotWizard,
   }))
 );
-
-interface BotTick {
-  id: number;
-  status: BotSummary['status'];
-  positionSize: number;
-  avgEntryPrice: number;
-  gridProfit: number;
-  trendPnl: number;
-  totalPnl: number;
-}
 
 export function BotsListPage() {
   const botsQuery = useQuery({
@@ -35,13 +23,8 @@ export function BotsListPage() {
     staleTime: 5_000,
   });
 
-  const [ticks, setTicks] = useState<Record<number, BotTick>>({});
-  // Same single-bot subscription as Overview; expand when multi-bot lands.
-  useWsChannel<BotTick>('bot:42', (msg) => {
-    if (msg.type === 'tick') {
-      setTicks((t) => ({ ...t, [msg.data.id]: msg.data }));
-    }
-  });
+  // Per-card WS subscription lives inside BotCard now, so this page
+  // doesn't need a global hardcoded bot:N channel.
 
   const [wizardOpen, setWizardOpen] = useState(false);
 
@@ -74,10 +57,7 @@ export function BotsListPage() {
   // Hide stopped bots from the active list — they live in History.
   const allBots = botsQuery.data?.bots ?? [];
   const bots = allBots.filter((b) => b.status !== 'stopped');
-  const runningCount = bots.filter((b) => {
-    const status = ticks[b.id]?.status ?? b.status;
-    return status === 'running';
-  }).length;
+  const runningCount = bots.filter((b) => b.status === 'running').length;
 
   return (
     <div className="flex flex-col gap-6">
@@ -97,7 +77,7 @@ export function BotsListPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {bots.map((bot) => (
-          <BotCard key={bot.id} bot={bot} tick={ticks[bot.id] ?? null} />
+          <BotCard key={bot.id} bot={bot} />
         ))}
         <button
           type="button"

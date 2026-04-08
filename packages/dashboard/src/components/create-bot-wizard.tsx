@@ -120,7 +120,13 @@ export function CreateBotWizard({ open, onClose }: CreateBotWizardProps) {
 
   function update<K extends keyof WizardState>(key: K, value: WizardState[K]) {
     setState((s) => ({ ...s, [key]: value }));
-    setValidated(null);
+    // Only invalidate the cached /validate result when a CONFIG field
+    // changes — ticking the risk checkbox on step 4 must NOT reset
+    // validated, otherwise StepConfirm re-renders to null (line 469)
+    // and the checkbox disappears mid-tick, breaking the wizard.
+    if (key !== 'acceptedRisk') {
+      setValidated(null);
+    }
   }
 
   // Trigger validate when entering Step 3 (Confirm).

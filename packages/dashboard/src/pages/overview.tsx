@@ -4,14 +4,12 @@ import { useQuery } from '@tanstack/react-query';
 import { lazy, Suspense, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { api } from '@/lib/api-client';
-import { useWsChannel } from '@/lib/use-ws-channel';
 import { formatPercent, formatPnl, formatUsd } from '@/lib/format';
 import { StatCard } from '@/components/primitives/stat-card';
 import { Delta } from '@/components/primitives/delta';
 import { Button } from '@/components/primitives/button';
 import { Card } from '@/components/primitives/card';
 import { BotCard } from '@/components/bot-card';
-import type { BotSummary } from '@/lib/api-types';
 
 // Lazy: only loaded when the user clicks "New bot" — keeps the wizard's
 // validation hooks + Modal off the initial page payload.
@@ -21,44 +19,17 @@ const CreateBotWizard = lazy(() =>
   }))
 );
 
-interface BotTick {
-  id: number;
-  status: BotSummary['status'];
-  positionSize: number;
-  avgEntryPrice: number;
-  gridProfit: number;
-  trendPnl: number;
-  totalPnl: number;
-}
-
 export function OverviewPage() {
   const botsQuery = useQuery({
     queryKey: ['bots'],
     queryFn: () => api.getBots(),
-    staleTime: 5_000,
-  });
-
-  // Real lifetime grid profit via spread-pair matching of fills_archive
-  // (post bot.created_at). Same algorithm the engine's
-  // calculateRealGridProfit() uses, but operating over the FULL
-  // backfilled fill history instead of just the last ~430 fills.
-  // Decoupled from compound rebalances and external margin transfers
-  // because it only counts trade pairs, not balance changes.
-  const realizedQuery = useQuery({
-    queryKey: ['realized-summary', 42],
-    queryFn: () => api.getRealizedSummary(42),
-    refetchInterval: 30_000,
-    staleTime: 15_000,
-  });
-
-  // Live ticks per bot, keyed by id.
-  const [ticks, setTicks] = useState<Record<number, BotTick>>({});
-  // For now we only listen to bot:42; multi-bot WS subscription comes when
-  // there are actually multiple bots.
-  useWsChannel<BotTick>('bot:42', (msg) => {
-    if (msg.type === 'tick') {
-      setTicks((t) => ({ ...t, [msg.data.id]: msg.data }));
-    }
+    // Re-fetch every 5s to pick up live changes from running bots; the
+    // per-bot WS subscription on each BotCard will paint smoother live
+    // ticks on the cards themselves, but the aggregate stat strip uses
+    // this REST data so it stays consistent across all bots without
+    // needing a multi-channel WS manager.
+    refetchInterval: 5_000,
+    staleTime: 2_000,
   });
 
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -103,19 +74,15 @@ export function OverviewPage() {
   //   - equity:      invested + totalPnl
   let totalInvested = 0;
   let totalUnrealized = 0;
+  let totalRealized = 0;
   let runningCount = 0;
   for (const bot of bots) {
-    const tick = ticks[bot.id];
-    const status = tick?.status ?? bot.status;
-    const unrealized = tick?.trendPnl ?? bot.trend_pnl_usdt;
     totalInvested += bot.investment_usdt;
-    totalUnrealized += unrealized;
-    if (status === 'running') runningCount++;
+    totalUnrealized += bot.trend_pnl_usdt;
+    totalRealized += bot.grid_profit_usdt;
+    if (bot.status === 'running') runningCount++;
   }
 
-  const totalRealized =
-    realizedQuery.data?.netGridProfit ??
-    bots.reduce((acc, b) => acc + b.grid_profit_usdt, 0);
   const totalPnl = totalRealized + totalUnrealized;
   const totalEquity = totalInvested + totalPnl;
   const totalPct = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0;
@@ -186,7 +153,7 @@ export function OverviewPage() {
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {bots.map((bot) => (
-            <BotCard key={bot.id} bot={bot} tick={ticks[bot.id] ?? null} />
+            <BotCard key={bot.id} bot={bot} />
           ))}
           {/* Create-new tile */}
           <button

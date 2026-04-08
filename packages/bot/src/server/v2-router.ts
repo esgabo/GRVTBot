@@ -865,16 +865,33 @@ export function createV2Router(deps: V2RouterDeps): Router {
       return res.status(400).json({ error: 'validation_failed', errors });
     }
 
-    // Computed parameters — must mirror grid-engine.ts so the wizard preview
-    // matches reality. If the engine ever changes its math, update this too.
+    // Computed parameters — must EXACTLY mirror grid-engine.ts +
+    // db.createBot() so the wizard preview matches what gets stored
+    // and what actually trades. We had three different formulas at
+    // one point (validate, calculateGridLevels, db.createBot) and
+    // they disagreed: bot 43 hit it on 2026-04-08 — the wizard said
+    // 0.0084 ETH/level but the bot ran with 0.05/0.06, drifting the
+    // position by 0.17 ETH on a 6-min run. Single source of truth now.
     const spacing = (upper - lower) / (grids - 1);
     const notional = investment * leverage;
-    const qtyPerLevel = notional / grids / ((upper + lower) / 2);
+    const ORDER_ALLOC = 0.75;
+    const midPrice = (upper + lower) / 2;
+    const effCap = investment * leverage * ORDER_ALLOC;
+    const minSize = pair === 'ETH_USDT_Perp' ? 0.01 : 0.001;
+    let qtyPerLevel = Math.max(
+      Math.ceil((effCap / grids / midPrice) * 100) / 100,
+      0.03
+    );
+    // Floor on min notional at the lower price (safety net; usually no-op).
+    const minNotional = pair === 'ETH_USDT_Perp' ? 20 : 100;
+    while (qtyPerLevel * lower < minNotional) {
+      qtyPerLevel += minSize;
+    }
+    qtyPerLevel = Math.round(qtyPerLevel * 100) / 100;
     const profitPerRoundTrip = qtyPerLevel * spacing;
 
     // Estimated liquidation: simplified — actual depends on funding/fees.
     // For LONG: liq ≈ avg_entry * (1 - 1/leverage * 0.95)
-    const midPrice = (upper + lower) / 2;
     const liquidationEstimate =
       direction === 'long'
         ? midPrice * (1 - (1 / leverage) * 0.95)

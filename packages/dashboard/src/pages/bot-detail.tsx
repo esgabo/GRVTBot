@@ -59,7 +59,10 @@ interface FillEvent {
 
 export function BotDetailPage() {
   const { id } = useParams();
-  const botId = Number(id ?? '42');
+  // Parse bot id from URL. NaN here means the route was hit without a
+  // valid id segment — render the error card below instead of falling
+  // back to a hardcoded id (used to be 42, which leaked stale state).
+  const botId = Number(id);
   const queryClient = useQueryClient();
 
   // Bot summary (low-frequency)

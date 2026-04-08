@@ -246,7 +246,14 @@ export class GridEngine extends EventEmitter {
       // Calcular niveles de grid
       const calculation = await this.calculateGridLevels(config);
       
-      // Crear bot en database (status = 'paused')
+      // Crear bot en database (status = 'paused').
+      // Pass quantity_per_level explicitly so the DB does NOT recompute
+      // it via its own formula. The engine's calculateGridLevels() and
+      // db.createBot() formulas must agree exactly, otherwise the grid
+      // levels go in at one qty and the monitor's replacement orders
+      // (which read getFixedQty() → bot.quantity_per_level) go in at
+      // another, causing position drift. The fix here ensures there is
+      // exactly one source of truth: calculation.quantityPerGrid.
       const botId = await db.createBot({
         pair: config.pair,
         direction: config.direction,
@@ -255,6 +262,7 @@ export class GridEngine extends EventEmitter {
         upper_price: config.upperPrice,
         num_grids: config.numGrids,
         investment_usdt: config.investmentUSDT,
+        quantity_per_level: calculation.quantityPerGrid,  // canonical, immutable
         grid_profit_usdt: 0,
         trend_pnl_usdt: 0,
         total_pnl_usdt: 0,
@@ -596,25 +604,53 @@ export class GridEngine extends EventEmitter {
       throw new Error(`Precio actual ${currentPrice} está fuera del rango [${config.lowerPrice}, ${config.upperPrice}]`);
     }
 
-    // ⚠️ FIX: Calcular spacing correcto para generar numGrids grids (numGrids+1 niveles)
     const spacing = (config.upperPrice - config.lowerPrice) / config.numGrids;
-    
-    // ⚠️ FIX: Calcular quantity POR NIVEL en USD (no ETH fijo)
-    // Cada grid tiene el mismo valor en USD → a precios más bajos, más ETH
-    const usdPerGrid = (config.investmentUSDT * config.leverage) / config.numGrids;
+
+    // CANONICAL per-level qty — must match exactly what db.createBot()
+    // stores in bot.quantity_per_level, otherwise the initial orders go
+    // in at one qty and the monitor's replacement orders (which read
+    // from getFixedQty() → bot.quantity_per_level) go in at another,
+    // causing permanent position drift.
+    //
+    // Bot 43 hit this on 2026-04-08: initial buys at 0.05 but sells
+    // at 0.05/0.06 because the old per-level formula varied qty by
+    // price. Then monitor replaced at the canonical 0.05. Position
+    // drifted by 0.17 ETH (~$377) before the user closed.
+    //
+    // Formula matches db.createBot() line ~470:
+    //   ORDER_ALLOC = 0.75 (15% safety on top of leverage cap, 10% extra)
+    //   effCap = inv * leverage * ORDER_ALLOC
+    //   midPrice = (lower + upper) / 2  ← uses range mid, NOT live price
+    //   qty = ceil((effCap / numGrids / midPrice) * 100) / 100
+    //   floor 0.03
+    const ORDER_ALLOC = 0.75;
+    const midPrice = (config.lowerPrice + config.upperPrice) / 2;
+    const effCap = config.investmentUSDT * config.leverage * ORDER_ALLOC;
     const minNotional = config.pair === 'ETH_USDT_Perp' ? 20 : 100;
     const minSize = config.pair === 'ETH_USDT_Perp' ? 0.01 : 0.001;
+    let canonicalQty = Math.max(
+      Math.ceil((effCap / config.numGrids / midPrice) * 100) / 100,
+      0.03
+    );
+    // Ensure min notional at the LOWEST price (worst-case for buy levels):
+    // a 0.03 qty at $1800 = $54 which is well above $20, so this is
+    // usually a no-op, but keep it as defense in depth.
+    while (canonicalQty * config.lowerPrice < minNotional) {
+      canonicalQty += minSize;
+    }
+    canonicalQty = Math.round(canonicalQty * 100) / 100;
 
     console.log(`🧮 Grid calculation: ${config.numGrids} grids = ${config.numGrids + 1} niveles`);
     console.log(`🧮 Rango: $${config.lowerPrice} - $${config.upperPrice}`);
     console.log(`🧮 Spacing: $${spacing.toFixed(2)} por nivel`);
-    console.log(`🧮 USD por grid: $${usdPerGrid.toFixed(2)} (con ${config.leverage}x leverage)`);
+    console.log(`🧮 Canonical qty per level: ${canonicalQty} ETH (effCap $${effCap.toFixed(2)} / ${config.numGrids} grids / $${midPrice} mid)`);
 
-    // Generar niveles 0 a numGrids (inclusive) = numGrids+1 niveles total
+    // Generate level 0..numGrids = numGrids+1 levels. Every level
+    // gets the SAME canonicalQty so the grid is constant-quantity.
     const gridLevels = [];
     for (let i = 0; i <= config.numGrids; i++) {
       const price = Math.round((config.lowerPrice + (i * spacing)) * 100) / 100;
-      
+
       let side: 'buy' | 'sell';
       if (config.direction === 'long') {
         side = price < currentPrice ? 'buy' : 'sell';
@@ -622,23 +658,15 @@ export class GridEngine extends EventEmitter {
         side = price > currentPrice ? 'sell' : 'buy';
       }
 
-      // Quantity en ETH = USD por grid / precio del nivel, redondeado a min_size
-      let quantity = Math.ceil(usdPerGrid / price / minSize) * minSize;
-      // Asegurar min_notional
-      while (quantity * price < minNotional) {
-        quantity += minSize;
-      }
-      quantity = Math.round(quantity * 100) / 100; // Round to 0.01
-
       gridLevels.push({
         index: i,
         price,
         side,
-        quantity
+        quantity: canonicalQty,
       });
     }
 
-    const quantityPerGrid = usdPerGrid / currentPrice; // Para el summary
+    const quantityPerGrid = canonicalQty;
 
     console.log(`🧮 Generados ${gridLevels.length} niveles (0 a ${config.numGrids})`);
 

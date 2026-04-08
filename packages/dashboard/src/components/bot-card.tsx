@@ -3,12 +3,14 @@
 
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { Card } from './primitives/card';
 import { Mono } from './primitives/mono';
 import { StatusPill } from './primitives/status-pill';
 import { Delta } from './primitives/delta';
 import { Sparkline } from './charts/sparkline';
 import { api } from '@/lib/api-client';
+import { useWsChannel } from '@/lib/use-ws-channel';
 import {
   formatPercent,
   formatPnl,
@@ -17,20 +19,27 @@ import {
 } from '@/lib/format';
 import type { BotSummary } from '@/lib/api-types';
 
-interface BotCardProps {
-  bot: BotSummary;
-  // Live tick override (from WS).
-  tick?: {
-    status: BotSummary['status'];
-    positionSize: number;
-    avgEntryPrice: number;
-    gridProfit: number;
-    trendPnl: number;
-    totalPnl: number;
-  } | null;
+interface BotTick {
+  status: BotSummary['status'];
+  positionSize: number;
+  avgEntryPrice: number;
+  gridProfit: number;
+  trendPnl: number;
+  totalPnl: number;
 }
 
-export function BotCard({ bot, tick }: BotCardProps) {
+interface BotCardProps {
+  bot: BotSummary;
+}
+
+export function BotCard({ bot }: BotCardProps) {
+  // Per-card WS subscription. Each card listens to its own bot:N channel
+  // so the parent (Overview / BotsList) doesn't need a hardcoded bot id
+  // or a global tick map. The hook is stable per card instance.
+  const [tick, setTick] = useState<BotTick | null>(null);
+  useWsChannel<BotTick>(`bot:${bot.id}`, (msg) => {
+    if (msg.type === 'tick') setTick(msg.data);
+  });
   // Pull last 30 days of snapshots for the sparkline. Cheap query (≤30 rows).
   const snapshots = useQuery({
     queryKey: ['snapshots', bot.id],
