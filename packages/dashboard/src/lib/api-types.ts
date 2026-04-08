@@ -105,6 +105,39 @@ export interface RebateSummary {
   maxFee: number;
 }
 
+// Returned by /api/v2/bots/:id/range/preview AND used internally by the
+// commit endpoint so the user is committing to exactly what they saw.
+// Mirrors RangeUpdatePlan from the bot engine — every numeric field is
+// derived from real GRVT state, no estimates.
+export interface RangeUpdatePlan {
+  botId: number;
+  currentRange: { lower: number; upper: number };
+  newRange: { lower: number; upper: number };
+  currentPrice: number;
+  currentPosition: number;
+  newSellLevels: number;
+  newBuyLevels: number;
+  newTotalLevels: number;
+  newSpacing: number;
+  canonicalQty: number;
+  ethNeeded: number;
+  ethDeficit: number;
+  ethExcess: number;
+  autoBuy: {
+    size: number;
+    estimatedPrice: number;
+    estimatedCost: number;
+    slippagePct: number;
+    estimatedSlippageUsd: number;
+  } | null;
+  ordersToCancel: number;
+  ordersToCancelSample: Array<{ order_id: string; price: number }>;
+  levelsToCreate: number;
+  warnings: string[];
+  safetyViolations: string[];
+  noop: boolean;
+}
+
 // Real grid_profit, computed by spread-pairing every fill in fills_archive
 // (filtered to post-bot-creation). Same algorithm the engine uses for
 // bot.grid_profit_usdt, but operating over the FULL backfilled history

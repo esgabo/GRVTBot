@@ -17,6 +17,7 @@ import {
   type GridState,
   type HealthV2,
   type OrderRow,
+  type RangeUpdatePlan,
   type RealizedSummary,
   type RebateSummary,
   type Roundtrip,
@@ -153,6 +154,38 @@ export const api = {
   pauseBot: (id: number) =>
     request<{ id: number; status: 'paused' }>(`/bots/${id}/pause`, {
       method: 'POST',
+    }),
+
+  // Read-only dry-run of a range update. Returns the full plan
+  // (orders to cancel, levels to create, ETH to auto-buy with cost
+  // estimate, warnings, safety violations) WITHOUT executing anything.
+  // The dialog calls this on every input change for live preview.
+  previewBotRangeUpdate: (
+    id: number,
+    body: { lowerPrice: number; upperPrice: number }
+  ) =>
+    request<{ plan: RangeUpdatePlan }>(`/bots/${id}/range/preview`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  // Commit a range update. The engine re-runs the same plan-builder
+  // server-side, so the user is committing exactly what they saw in
+  // preview. Refuses on safety violations; short-circuits on no-op.
+  // Atomic: per-bot mutex held for the duration so monitor() cannot
+  // race against the mutation.
+  updateBotRange: (
+    id: number,
+    body: { lowerPrice: number; upperPrice: number }
+  ) =>
+    request<{
+      id: number;
+      lowerPrice: number;
+      upperPrice: number;
+      numGrids: number;
+    }>(`/bots/${id}/range`, {
+      method: 'POST',
+      body: JSON.stringify(body),
     }),
 
   getCandles: (
