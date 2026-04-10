@@ -46,9 +46,10 @@ beforeAll(() => {
   // Replace console
   global.console = mockConsole as any;
   
-  // Mock environment variables
-  process.env.GRVT_PRIVATE_KEY = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
-  process.env.GRVT_SUB_ACCOUNT_ID = '1';
+  // Mock environment variables (match names used by order-signer.ts fallback path)
+  process.env.GRVT_API_SECRET = '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+  process.env.GRVT_TRADING_ADDRESS = '0xAbCdEf0123456789AbCdEf0123456789AbCdEf01';
+  process.env.GRVT_TRADING_ACCOUNT_ID = '1';
 });
 
 afterEach(() => {

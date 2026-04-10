@@ -1501,7 +1501,7 @@ export class GridEngine extends EventEmitter {
 /**
  * Instancia individual de un Grid Bot
  */
-class GridBotInstance {
+export class GridBotInstance {
   private bot: GridBot;
   private gridLevels: GridLevel[] = [];
   private activeOrders = new Map<string, OrderRecord>();
