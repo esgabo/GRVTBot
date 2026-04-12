@@ -296,6 +296,20 @@ export class GridBotDB {
       WHERE quantity_per_level IS NULL
     `);
 
+    // Migration: compound_* columns. These were added manually on the
+    // production DB during the compound rebalance feature but never had
+    // proper ALTER statements, so a fresh DB (dev, test, new deploy)
+    // would crash on any SELECT that references them.
+    for (const col of [
+      'compound_pct REAL',
+      'compound_threshold_usdt REAL',
+      'compound_interval_hours REAL',
+      'last_compound_at TEXT',
+      'total_reinvested REAL',
+    ]) {
+      try { await this.dbRun(`ALTER TABLE grid_bots ADD COLUMN ${col}`); } catch (e) { /* exists */ }
+    }
+
     // Migration: safeguard_* columns (C.4). Liquidation proximity check,
     // opt-in per bot at creation. Legacy bots get safeguard_enabled=0 via
     // the DEFAULT, so their behavior does not change after this migration.
