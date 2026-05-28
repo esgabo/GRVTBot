@@ -1,14 +1,21 @@
 // Singleton WebSocket connection manager.
 //
 // Mirrors the protocol of packages/bot/src/server/ws-server.ts:
-//   - URL: ws[s]://host/ws?api_key=<key>
+//   - URL: ws[s]://host/ws?token=<jwt>
 //   - Server sends `hello` on connect, `pong` on app-level ping
 //   - Client subscribes to channels via { type: 'subscribe', channels: [...] }
 //   - All frames JSON: { type, channel, data, timestamp }
 //
+// Auth: JWT-only. The legacy `?api_key=` mode was removed because the
+// shared dashboard key was being shipped in the public Vite bundle. Server
+// still accepts `?api_key=` for operator scripts (curl/admin); the browser
+// never does.
+//
 // Reconnection: exponential backoff, capped. The hook layer (use-ws-channel)
 // re-issues subscribe frames after every reconnect so consumers don't have to
 // know about disconnect events.
+
+import { getAuthToken } from './api-client';
 
 export type WsStatus = 'connecting' | 'open' | 'closed' | 'error';
 
@@ -26,7 +33,6 @@ const RECONNECT_DELAYS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 
 class WsClient {
   private ws: WebSocket | null = null;
-  private url: string;
   private status: WsStatus = 'closed';
   private channelListeners = new Map<string, Set<Listener>>();
   private statusListeners = new Set<StatusListener>();
@@ -35,10 +41,7 @@ class WsClient {
   private intentionallyClosed = false;
   private appPingTimer: number | null = null;
 
-  constructor() {
-    // Build WS URL based on Vite env. In dev, point at the same origin so
-    // the Vite proxy handles upgrades. In prod, allow override via env.
-    const apiKey = import.meta.env.VITE_DASHBOARD_API_KEY ?? '';
+  private buildUrl(token: string): string {
     const baseOverride = import.meta.env.VITE_API_BASE_URL ?? '';
     let wsBase: string;
     if (baseOverride) {
@@ -49,19 +52,36 @@ class WsClient {
     } else {
       wsBase = 'ws://localhost:3848';
     }
-    this.url = `${wsBase}/ws?api_key=${encodeURIComponent(apiKey)}`;
+    return `${wsBase}/ws?token=${encodeURIComponent(token)}`;
   }
 
   /**
    * Lazy connect. Safe to call multiple times — only connects once.
+   * No-op if there is no JWT (the user hasn't logged in yet).
    */
   connect(): void {
-    if (this.ws && this.ws.readyState !== WebSocket.CLOSED) return;
+    if (this.ws) {
+      const state = this.ws.readyState;
+      // OPEN or CONNECTING: already healthy, nothing to do.
+      if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) return;
+      // CLOSING or CLOSED: abandon the old socket reference so we can
+      // build a fresh one. Without this, an immediate reconnect after
+      // disconnect() (e.g. login after logout) would bail here while
+      // the old socket finishes its close handshake.
+      this.ws = null;
+    }
+    const token = getAuthToken();
+    if (!token) {
+      // Nothing to authenticate with. Stay closed until AuthProvider
+      // calls connect() again after login.
+      this.setStatus('closed');
+      return;
+    }
     this.intentionallyClosed = false;
     this.setStatus('connecting');
 
     try {
-      this.ws = new WebSocket(this.url);
+      this.ws = new WebSocket(this.buildUrl(token));
     } catch (err) {
       console.error('[ws] failed to construct WebSocket', err);
       this.setStatus('error');
@@ -102,7 +122,7 @@ class WsClient {
       }
       // 4401 = unauthorized, don't retry blindly
       if (event.code === 4401) {
-        console.error('[ws] unauthorized — check VITE_DASHBOARD_API_KEY');
+        console.error('[ws] unauthorized — token rejected by server');
         this.setStatus('error');
         return;
       }

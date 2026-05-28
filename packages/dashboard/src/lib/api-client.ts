@@ -31,9 +31,6 @@ import {
 } from './api-types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
-// Legacy API key — kept as fallback during migration so the
-// dashboard keeps working before the user logs in for the first time.
-const LEGACY_API_KEY = import.meta.env.VITE_DASHBOARD_API_KEY ?? '';
 
 // JWT token set by AuthProvider via setAuthToken(). Stored in a module
 // var so the request() helper reads the current value on every call
@@ -41,18 +38,15 @@ const LEGACY_API_KEY = import.meta.env.VITE_DASHBOARD_API_KEY ?? '';
 let jwtToken: string | null = null;
 export function setAuthToken(token: string) { jwtToken = token; }
 export function clearAuthToken() { jwtToken = null; }
+export function getAuthToken(): string | null { return jwtToken; }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = `${BASE_URL}/api/v2${path}`;
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json');
 
-  // Prefer JWT. Fall back to legacy X-Api-Key if no token yet
-  // (first visit before login).
   if (jwtToken) {
     headers.set('Authorization', `Bearer ${jwtToken}`);
-  } else if (LEGACY_API_KEY) {
-    headers.set('X-Api-Key', LEGACY_API_KEY);
   }
 
   if (init.body && !headers.has('Content-Type')) {

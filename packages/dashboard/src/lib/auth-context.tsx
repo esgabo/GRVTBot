@@ -15,6 +15,7 @@ import {
   type ReactNode,
 } from 'react';
 import { api, setAuthToken, clearAuthToken } from './api-client';
+import { wsClient } from './ws-client';
 
 const TOKEN_KEY = 'grvt-grid-token';
 
@@ -50,11 +51,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(TOKEN_KEY, t);
     setAuthToken(t);
     setToken(t);
+    // Kick the singleton WS so it picks up the new token. If it was
+    // already open under a previous token (token refresh), reconnect.
+    wsClient.disconnect();
+    wsClient.connect();
   }, []);
 
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     clearAuthToken();
+    wsClient.disconnect();
     setToken(null);
     setUser(null);
   }, []);

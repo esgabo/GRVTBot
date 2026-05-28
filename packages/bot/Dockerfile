@@ -42,11 +42,9 @@ WORKDIR /build
 
 ARG VITE_BASE_PATH=/dashboard/
 ARG VITE_API_BASE_URL=
-ARG VITE_DASHBOARD_API_KEY=
 
 ENV VITE_BASE_PATH=${VITE_BASE_PATH} \
-    VITE_API_BASE_URL=${VITE_API_BASE_URL} \
-    VITE_DASHBOARD_API_KEY=${VITE_DASHBOARD_API_KEY}
+    VITE_API_BASE_URL=${VITE_API_BASE_URL}
 
 COPY package.json package-lock.json ./
 COPY packages/dashboard/package.json packages/dashboard/
