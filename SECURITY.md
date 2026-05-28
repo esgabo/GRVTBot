@@ -106,3 +106,66 @@ postmortem after users are safe.
   network-layer DoS).
 - Issues in third-party services (GRVT itself, the SMTP provider, the
   hosting provider).
+
+## Disclosed advisories
+
+We disclose security-impacting fixes here after the hosted instance is
+patched, so self-hosters can decide whether their deployment is affected
+and pull the fix. Severity reflects worst-case impact on the hosted
+instance at grvtbot.com; self-hosted instances may face different
+exposure depending on their topology.
+
+### 2026-05-28 — Dashboard API key exposed in client bundle (Critical)
+
+**Commit:** [`4631ba9`](https://github.com/kmanus88/GRVTBot/commit/4631ba9).
+**Scope:** hosted instance affected; self-hosters affected if they kept
+the (now-removed) `VITE_DASHBOARD_API_KEY` env var in their dashboard
+build env.
+
+The `VITE_DASHBOARD_API_KEY` variable was inlined into the production
+JavaScript bundle and served publicly under `/dashboard/assets/*.js`.
+Any browser visiting the site could extract the key from the bundle
+and reach every `/api/v2/*` endpoint authenticated as the operator
+account (`user_id = 1`, admin), bypassing per-tenant scoping.
+
+Encrypted GRVT credentials remained safe — no endpoint returns plaintext
+api-secrets — but an attacker could read every user's bot data and
+trigger bot lifecycle actions (start / pause / close / update-range)
+against the operator's GRVT sub-account.
+
+**Fix:** the legacy `X-Api-Key` fallback was removed from the dashboard.
+Browser auth is now JWT-only; the WebSocket also moved to `?token=<jwt>`.
+The server still accepts `X-Api-Key` for operator scripts (curl, admin
+tooling) — that side is unchanged. The shared key on the production VPS
+was rotated in place. The compromised value never appeared in git
+history.
+
+Reported by [@ijromeo](https://instagram.com/ijromeo) (Instagram DM,
+responsible disclosure). Thank you.
+
+### 2026-05-28 — Bot close can leave orders + position open on GRVT (High)
+
+**Commit:** [`6331317`](https://github.com/kmanus88/GRVTBot/commit/6331317).
+**Scope:** all instances; impact is financial (drift on the user's own
+GRVT account), not a tenant-isolation break.
+
+`pauseBot()` and `closeBot()` in the grid engine cancelled open orders
+through the in-memory bot instance. If that instance was missing
+(engine restart race, previously-paused bot, or any path that removed
+it early), the cancel was skipped silently and the DB was still updated
+to `paused` / `stopped`. Surviving limit orders kept matching against
+price moves, drifting the position for hours before a user noticed.
+
+`closeBot()` additionally placed a single 0.5%-aggressive GTC limit to
+close any open position and never verified the fill, so a fast price
+move could leave the position partially or fully open with the DB
+already marked `stopped`.
+
+**Fix:** both functions now always cancel via the owner's GRVT client
+against the pair (independent of the in-memory map), and the position
+close retries with escalating slippage (0.5% / 2% / 5%) up to three
+attempts, re-reading the live position each time. A final
+cancel-all sweep clears any unfilled close-order tail.
+
+Found via live incident review on 2026-05-28 (no external reporter).
+Production residue was cleaned up before the patch shipped.
