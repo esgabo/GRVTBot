@@ -44,11 +44,10 @@ services:
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       MASTER_KEY_PATH: /app/data/.master.key
     volumes:
-      - ./data:/app/data
-      - ./logs/bot:/app/logs
-      # Note: master key is stored inside ./data/.master.key (already mounted above)
-      # and pointed to via MASTER_KEY_PATH=/app/data/.master.key env var.
-      # Dokploy does not apply arbitrary host bind mounts from the compose file.
+      - bot-data:/app/data
+      - bot-logs:/app/logs
+      # Note: master key lives at /app/data/.master.key inside the bot-data volume.
+      # On first deploy, copy it in: docker cp /etc/grvt-grid/master.key grvt-grid-bot:/app/data/.master.key
     ports:
       # Dokploy's Traefik routes your domain → this port.
       # Set BOT_PORT in env if 3848 is already taken on the host.
@@ -77,9 +76,9 @@ services:
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       NOTIFIER_HEALTH_PORT: "3849"
     volumes:
-      - ./data:/shared-data:ro
+      - bot-data:/shared-data:ro
       - notifier-state:/var/lib/grvt-grid-notifier
-      - ./logs/notifier:/app/logs
+      - bot-logs:/app/logs
     depends_on:
       bot:
         condition: service_started
@@ -92,4 +91,6 @@ services:
     profiles: ["with-notifier"]
 
 volumes:
+  bot-data:
+  bot-logs:
   notifier-state:
