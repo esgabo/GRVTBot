@@ -1,0 +1,85 @@
+# GRVT Grid — Dokploy deployment variant.
+#
+# Differences from docker-compose.yml:
+#   - No `env_file`: all env vars are injected by Dokploy's Environment UI tab
+#   - Master key bind-mounted from host at /etc/grvt-grid/master.key (see setup)
+#   - No caddy service: Dokploy's built-in Traefik handles TLS + domain routing
+#   - `notifier` still behind the "with-notifier" profile (disabled by default)
+#
+# First-time setup on the Dokploy host (SSH in once before first deploy):
+#   sudo mkdir -p /etc/grvt-grid
+#   sudo sh -c 'echo "<BASE64_FROM_VAULT>" | base64 -d > /etc/grvt-grid/master.key'
+#   sudo chmod 600 /etc/grvt-grid/master.key
+#   sudo chown 10000:10000 /etc/grvt-grid/master.key
+#
+# In Dokploy UI:
+#   - Project type: Docker Compose
+#   - Compose file: docker-compose.dokploy.yml
+#   - Domain: your domain → port 3848 on the `bot` service
+#   - Environment tab: set all vars listed in docs/deploy/DOKPLOY.md
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: packages/bot/Dockerfile
+    image: grvt-grid/bot:latest
+    container_name: grvt-grid-bot
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    # No env_file here — Dokploy injects all vars through its Environment tab.
+    environment:
+      NODE_ENV: production
+      DASHBOARD_PORT: "3848"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+    volumes:
+      - ./data:/app/data
+      - ./logs/bot:/app/logs
+      # Master encryption key — created on the host during first-deploy setup.
+      # Owns the decryption of every user's stored GRVT API credentials.
+      - /etc/grvt-grid/master.key:/etc/grvt-grid/master.key:ro
+    ports:
+      # Dokploy's Traefik routes your domain → this port.
+      # Set BOT_PORT in env if 3848 is already taken on the host.
+      - "${BOT_PORT:-3848}:3848"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:3848/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  notifier:
+    build:
+      context: .
+      dockerfile: packages/notifier/Dockerfile
+    image: grvt-grid/notifier:latest
+    container_name: grvt-grid-notifier
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+    # No env_file — Dokploy injects TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID via UI.
+    environment:
+      NODE_ENV: production
+      GRID_BOT_DB: /shared-data/grid_bot.db
+      NOTIFIER_STATE_DIR: /var/lib/grvt-grid-notifier
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      NOTIFIER_HEALTH_PORT: "3849"
+    volumes:
+      - ./data:/shared-data:ro
+      - notifier-state:/var/lib/grvt-grid-notifier
+      - ./logs/notifier:/app/logs
+    depends_on:
+      bot:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:3849/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    profiles: ["with-notifier"]
+
+volumes:
+  notifier-state:
