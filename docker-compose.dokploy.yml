@@ -33,7 +33,11 @@ services:
     restart: unless-stopped
     stop_signal: SIGTERM
     stop_grace_period: 30s
-    # No env_file here — Dokploy injects all vars through its Environment tab.
+    # env_file is managed on the host at the compose project directory.
+    # See docs/deploy/DOKPLOY.md for required vars.
+    env_file:
+      - path: .env
+        required: false
     environment:
       NODE_ENV: production
       DASHBOARD_PORT: "3848"
