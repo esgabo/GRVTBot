@@ -25,9 +25,12 @@ COPY package.json package-lock.json ./
 COPY packages/bot/package.json packages/bot/
 COPY packages/bot/tsconfig.json packages/bot/
 
-# Force sqlite3 to build from source so it links against this image's glibc
-# instead of downloading a prebuilt binary compiled against a newer glibc.
-RUN npm_config_build_from_source=true npm ci --workspace=@grvt-grid/bot --include-workspace-root
+RUN npm ci --workspace=@grvt-grid/bot --include-workspace-root
+
+# sqlite3 uses node-pre-gyp and downloads a prebuilt binary that may require
+# a newer glibc than bookworm provides. Rebuild from source so the .node file
+# links against this image's glibc instead of a prebuilt binary's glibc.
+RUN npm rebuild sqlite3 --build-from-source
 
 # Now copy the source and build
 COPY packages/bot/src packages/bot/src
