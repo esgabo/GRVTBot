@@ -38,6 +38,7 @@ services:
       NODE_ENV: production
       DASHBOARD_PORT: "3848"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
+      MASTER_KEY_PATH: /app/data/.master.key
     volumes:
       - ./data:/app/data
       - ./logs/bot:/app/logs
