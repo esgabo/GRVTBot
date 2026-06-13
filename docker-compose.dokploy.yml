@@ -12,6 +12,11 @@
 #   sudo chmod 600 /etc/grvt-grid/master.key
 #   sudo chown 10000:10000 /etc/grvt-grid/master.key
 #
+# The data/ and logs/ directories are created automatically via the
+# `volumes` section below (named volumes owned by the container user).
+# If using bind mounts ensure they exist and are owned by UID 10000:
+#   sudo mkdir -p ./data ./logs/bot && sudo chown -R 10000:10000 ./data ./logs
+#
 # In Dokploy UI:
 #   - Project type: Docker Compose
 #   - Compose file: docker-compose.dokploy.yml
