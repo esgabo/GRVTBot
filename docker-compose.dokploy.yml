@@ -41,9 +41,9 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs/bot:/app/logs
-      # Master encryption key — created on the host during first-deploy setup.
-      # Owns the decryption of every user's stored GRVT API credentials.
-      - /etc/grvt-grid/master.key:/etc/grvt-grid/master.key:ro
+      # Note: master key is stored inside ./data/.master.key (already mounted above)
+      # and pointed to via MASTER_KEY_PATH=/app/data/.master.key env var.
+      # Dokploy does not apply arbitrary host bind mounts from the compose file.
     ports:
       # Dokploy's Traefik routes your domain → this port.
       # Set BOT_PORT in env if 3848 is already taken on the host.
