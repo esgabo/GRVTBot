@@ -223,10 +223,9 @@ export class GRVTClient {
     } else {
       // Legacy fallback: read from env.
       const isMockMode = process.env.MOCK_MODE === 'true' || process.env.DRY_RUN === 'true';
+      // Empty string when operator credentials aren't set (multi-user mode).
+      // Methods that need auth will throw at call time, not at startup.
       this.tradingAccountId = process.env.GRVT_TRADING_ACCOUNT_ID || (isMockMode ? 'mock-account' : '');
-      if (!this.tradingAccountId) {
-        throw new Error('GRVT_TRADING_ACCOUNT_ID no encontrado en .env (set MOCK_MODE=true to bypass for development)');
-      }
     }
   }
 
